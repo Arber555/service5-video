@@ -35,6 +35,12 @@ ready:
 live:
 	curl -il http://localhost:3000/v1/liveness
 
+curl-create:
+	curl -i -X POST \
+	-H 'Content-Type: application/json' \
+	-d '{"name":"bill","email":"b@gmail.com","roles":["ADMIN"],"department":"ITO","password":"123","passwordConfirm":"123"}' \
+	http://localhost:3000/v1/users
+
 # ==============================================================================
 # Define dependencies
 
@@ -81,6 +87,8 @@ dev-up:
 		--config zarf/k8s/dev/kind-config.yaml
 
 	kubectl wait --timeout=120s --namespace=local-path-storage --for=condition=Available deployment/local-path-provisioner
+	
+	kind load docker-image $(POSTGRES) --name $(KIND_CLUSTER)
 
 dev-down:
 	kind delete cluster --name $(KIND_CLUSTER)
@@ -91,6 +99,9 @@ dev-load:
 	wait;
 
 dev-apply:
+	kustomize build zarf/k8s/dev/database | kubectl apply -f -
+	kubectl rollout status --namespace=$(NAMESPACE) --watch --timeout=120s sts/database
+
 	kustomize build zarf/k8s/dev/sales | kubectl apply -f -
 	kubectl wait pods --namespace=$(NAMESPACE) --selector app=$(SALES_APP) --timeout=120s --for=condition=Ready
 
@@ -111,6 +122,15 @@ dev-describe-deployment:
 
 dev-describe-sales:
 	kubectl describe pod --namespace=$(NAMESPACE) -l app=$(SALES_APP)
+
+dev-logs-db:
+	kubectl logs --namespace=$(NAMESPACE) -l app=database --all-containers=true -f --tail=100
+
+dev-logs-init:
+	kubectl logs --namespace=$(NAMESPACE) -l app=$(SALES_APP) -f --tail=100 -c init-migrate
+
+pgcli:
+	pgcli postgresql://postgres:postgres@localhost
 
 # ------------------------------------------------------------------------------
 
@@ -135,3 +155,23 @@ metrics-view-sc:
 tidy:
 	go mod tidy
 	go mod vendor
+
+# ==============================================================================
+# Running tests within the local computer
+
+test-race:
+	CGO_ENABLED=1 go test -race -count=1 ./...
+
+test-only:
+	CGO_ENABLED=0 go test -count=1 ./...
+
+lint:
+	CGO_ENABLED=0 go vet ./...
+	staticcheck -checks=all ./...
+
+vuln-check:
+	govulncheck ./...
+
+test: test-only lint vuln-check
+
+test-race: test-race lint vuln-check
